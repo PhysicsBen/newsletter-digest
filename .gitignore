@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+dist/
+*.egg-info/
+
+# Env / secrets
+.env
+credentials.json
+token.json
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Data (can be large; regenerate from Gmail)
+data/raw/
+data/embeddings/
+
+# OS
+.DS_Store
+Thumbs.db
