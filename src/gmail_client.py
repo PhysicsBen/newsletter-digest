@@ -45,13 +45,26 @@ _SKIP_URL_RE = re.compile(
 
 
 def _get_credentials() -> Credentials:
-    """Load OAuth2 credentials from token.json, refreshing if expired."""
-    creds = Credentials.from_authorized_user_file(settings.gmail_token_path, SCOPES)
-    if creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        # Persist refreshed token
+    """Load OAuth2 credentials from token.json, running browser OAuth flow if absent."""
+    import os
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
+    creds: Optional[Credentials] = None
+    if os.path.exists(settings.gmail_token_path):
+        creds = Credentials.from_authorized_user_file(settings.gmail_token_path, SCOPES)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                settings.gmail_credentials_path, SCOPES
+            )
+            creds = flow.run_local_server(port=0)
+
         with open(settings.gmail_token_path, "w") as f:
             f.write(creds.to_json())
+
     return creds
 
 
@@ -194,18 +207,19 @@ def fetch_new_emails(session: Session, since: Optional[datetime] = None) -> int:
     service = _get_gmail_service()
     label_id = _resolve_label_id(service, settings.gmail_label)
 
-    # Build the Gmail search query
-    query = f"label:{label_id}"
-    if after_ts:
-        query += f" after:{after_ts}"
+    # Build the Gmail search query — use labelIds param for label filtering;
+    # the label:{id} syntax in q only works with label names, not IDs.
+    query = f"after:{after_ts}" if after_ts else ""
 
-    log.info("Fetching Gmail messages: query=%r", query)
+    log.info("Fetching Gmail messages: label_id=%r query=%r", label_id, query)
 
     # Page through all matching message IDs
     message_ids: list[str] = []
     page_token = None
     while True:
-        kwargs: dict = {"userId": "me", "q": query, "maxResults": 500}
+        kwargs: dict = {"userId": "me", "labelIds": [label_id], "maxResults": 500}
+        if query:
+            kwargs["q"] = query
         if page_token:
             kwargs["pageToken"] = page_token
         resp = service.users().messages().list(**kwargs).execute()
