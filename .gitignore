@@ -18,6 +18,12 @@ token.json
 # Data (can be large; regenerate from Gmail)
 data/raw/
 data/embeddings/
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# Generated digests
+output/
 
 # OS
 .DS_Store
