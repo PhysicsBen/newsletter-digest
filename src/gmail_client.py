@@ -207,19 +207,19 @@ def fetch_new_emails(session: Session, since: Optional[datetime] = None) -> int:
     service = _get_gmail_service()
     label_id = _resolve_label_id(service, settings.gmail_label)
 
-    # Build the Gmail search query — use labelIds param for label filtering;
-    # the label:{id} syntax in q only works with label names, not IDs.
-    query = f"after:{after_ts}" if after_ts else ""
+    # Build the Gmail search query using label name (not ID) — Gmail's q= supports
+    # label:Name syntax natively and is more reliable than the labelIds parameter.
+    query = f"label:{settings.gmail_label}"
+    if after_ts:
+        query += f" after:{after_ts}"
 
-    log.info("Fetching Gmail messages: label_id=%r query=%r", label_id, query)
+    log.info("Fetching Gmail messages: query=%r", query)
 
     # Page through all matching message IDs
     message_ids: list[str] = []
     page_token = None
     while True:
-        kwargs: dict = {"userId": "me", "labelIds": [label_id], "maxResults": 500}
-        if query:
-            kwargs["q"] = query
+        kwargs: dict = {"userId": "me", "q": query, "maxResults": 500}
         if page_token:
             kwargs["pageToken"] = page_token
         resp = service.users().messages().list(**kwargs).execute()

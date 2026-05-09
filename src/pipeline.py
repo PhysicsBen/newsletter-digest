@@ -40,7 +40,7 @@ def run(since: datetime | None = None) -> None:
 
     with get_session() as session:
         log.info("Phase 1 — Gmail ingestion")
-        email_count = fetch_new_emails(session)
+        email_count = fetch_new_emails(session, since=since)
         log.info("Fetched %d new emails", email_count)
 
         log.info("Phase 2 — Article fetching")
