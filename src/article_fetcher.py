@@ -124,6 +124,10 @@ def _fetch_one(session: Session, client: httpx.Client, article: Article, canonic
     except (httpx.TimeoutException, httpx.RequestError) as exc:
         raise RuntimeError(f"HTTP error: {exc}") from exc
 
+    # Store the final URL after any redirects (resolves tracking/redirect links)
+    final_url = str(response.url)
+    article.canonical_url = canonicalize_url(final_url)
+
     if response.status_code == 403:
         article.is_paywalled = True
         article.processing_status = ProcessingStatus.done
