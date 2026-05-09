@@ -23,6 +23,7 @@ class Settings(BaseSettings):
 
     # Pipeline
     staleness_days: int = 30
+    dedup_similarity_threshold: float = 0.87
     topic_similarity_threshold: float = 0.82
     token_budget: int = 6000
 
