@@ -7,7 +7,9 @@ class Settings(BaseSettings):
     # LLM
     gemini_api_key: str = ""
     llm_model: str = "gemini/gemini-3-flash-preview"
-    llm_thinking_level: str = "low"
+    llm_thinking_level: str = "low"  # Gemini only; ignored for other providers
+    llm_temperature: float | None = None  # None = use provider default
+    ollama_base_url: str = "http://localhost:11434"  # Only used when llm_model starts with ollama/
     prompt_version: str = "v1.0"
 
     # Gmail
