@@ -20,6 +20,7 @@ from src.db.models import (
 )
 from src.llm.summarizer import (
     _chunk,
+    _extract_json_object,
     _parse_llm_response,
     _truncate,
     summarize_canonical_stories,
@@ -93,8 +94,27 @@ def test_parse_llm_response_with_code_fence():
     assert score == 4.0
 
 
+def test_parse_llm_response_strips_think_tags():
+    raw = '<think>Let me analyze this carefully.</think>\n{"summary": "Qwen output.", "significance_score": 5.0}'
+    summary, score = _parse_llm_response(raw)
+    assert summary == "Qwen output."
+    assert score == 5.0
+
+
+def test_parse_llm_response_trailing_text():
+    raw = '{"summary": "Good article.", "significance_score": 6.0}\n\nHope this helps!'
+    summary, score = _parse_llm_response(raw)
+    assert summary == "Good article."
+    assert score == 6.0
+
+
+def test_extract_json_object_nested_braces():
+    text = 'prefix {"summary": "Has {braces} inside.", "significance_score": 3.0} suffix'
+    assert json.loads(_extract_json_object(text))["significance_score"] == 3.0
+
+
 def test_parse_llm_response_invalid_raises():
-    with pytest.raises((json.JSONDecodeError, KeyError)):
+    with pytest.raises((json.JSONDecodeError, KeyError, ValueError)):
         _parse_llm_response("not json at all")
 
 

@@ -47,11 +47,44 @@ def _chunk(text: str, chunk_tokens: int) -> list[str]:
     return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
 
 
+def _extract_json_object(text: str) -> str:
+    """Return the first complete {...} JSON object from text, handling nesting."""
+    start = text.find("{")
+    if start == -1:
+        raise ValueError(f"No JSON object found in: {text[:200]!r}")
+    depth = 0
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text[start:], start):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    raise ValueError(f"Unclosed JSON object in: {text[:200]!r}")
+
+
 def _parse_llm_response(raw: str) -> tuple[str, float]:
     """Extract summary and significance_score from LLM JSON response."""
+    # Strip <think>...</think> blocks (Qwen3 may emit these even with /no_think)
+    cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
     # Strip markdown code fences if present
-    cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
-    data = json.loads(cleaned)
+    cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", cleaned).strip()
+    # Extract first complete JSON object — models often append trailing explanation text
+    json_str = _extract_json_object(cleaned)
+    data = json.loads(json_str)
     return str(data["summary"]), float(data["significance_score"])
 
 
