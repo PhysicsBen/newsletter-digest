@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///data/newsletter.db"
 
     # Embeddings
-    embedding_model: str = "BAAI/bge-m3"
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
 
     # Pipeline
     staleness_days: int = 30

@@ -111,6 +111,7 @@ def cluster_into_canonical_stories(session: Session) -> int:
 
         stories_created += 1
 
+    session.commit()
     log.info(
         "Deduplicated %d articles into %d canonical stories",
         len(articles),
