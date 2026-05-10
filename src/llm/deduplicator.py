@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 
 import numpy as np
+import torch
 from sentence_transformers import SentenceTransformer
 from sklearn.cluster import AgglomerativeClustering
 from sqlalchemy import select
@@ -26,8 +27,9 @@ def _get_model() -> SentenceTransformer:
     """Lazy-load and cache the sentence-transformers model for the process lifetime."""
     global _model
     if _model is None:
-        log.info("Loading embedding model: %s", settings.embedding_model)
-        _model = SentenceTransformer(settings.embedding_model)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        log.info("Loading embedding model: %s (device: %s)", settings.embedding_model, device)
+        _model = SentenceTransformer(settings.embedding_model, device=device)
     return _model
 
 
@@ -39,7 +41,7 @@ def embed_articles(texts: list[str]) -> list[list[float]]:
     Returns L2-normalised embeddings so dot-product == cosine similarity.
     """
     model = _get_model()
-    embeddings = model.encode(texts, show_progress_bar=False, normalize_embeddings=True)
+    embeddings = model.encode(texts, show_progress_bar=True, normalize_embeddings=True, batch_size=64)
     return embeddings.tolist()
 
 
