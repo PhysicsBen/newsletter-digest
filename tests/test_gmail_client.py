@@ -23,7 +23,9 @@ from src.db.models import (
 from src.gmail_client import (
     _decode_str,
     _extract_body,
+    _extract_blurb,
     _extract_urls,
+    _extract_urls_with_blurbs,
     _upsert_source,
     fetch_new_emails,
     get_watermark,
@@ -108,6 +110,58 @@ def test_extract_urls_skips_tracking():
     """
     urls = _extract_urls(html)
     assert urls == ["https://example.com/real-article"]
+
+
+def test_extract_urls_skips_beehiiv_tracking():
+    html = """
+    <a href="https://link.mail.beehiiv.com/ss/c/u001.xxx">Author name</a>
+    <a href="https://email.beehiivstatus.com/abc123/hclick">Pixel</a>
+    <a href="https://example.com/real-article">Real Article</a>
+    """
+    urls = _extract_urls(html)
+    assert urls == ["https://example.com/real-article"]
+
+
+def test_extract_urls_with_blurbs_returns_blurb():
+    html = """
+    <div>
+      <p><a href="https://example.com/story">Breaking: LLM outperforms humans</a> — 
+      This is a significant result showing that modern LLMs can now surpass humans 
+      on a range of complex reasoning tasks.</p>
+    </div>
+    """
+    results = _extract_urls_with_blurbs(html)
+    assert len(results) == 1
+    url, blurb = results[0]
+    assert url == "https://example.com/story"
+    assert blurb is not None
+    assert "significant result" in blurb
+
+
+def test_extract_urls_with_blurbs_fallback_to_link_text():
+    """If no parent context, long link text is used as blurb."""
+    html = '<a href="https://example.com/story">New approach to training transformer models achieves SOTA</a>'
+    results = _extract_urls_with_blurbs(html)
+    assert len(results) == 1
+    _, blurb = results[0]
+    assert blurb == "New approach to training transformer models achieves SOTA"
+
+
+def test_extract_urls_with_blurbs_none_for_short_link_text():
+    """Short link text with no parent context returns None blurb."""
+    html = '<a href="https://example.com/page">Read</a>'
+    results = _extract_urls_with_blurbs(html)
+    _, blurb = results[0]
+    assert blurb is None
+
+
+def test_blurb_capped_at_500_chars():
+    long_context = "X" * 600
+    html = f'<p>{long_context} <a href="https://example.com/article">Title</a></p>'
+    results = _extract_urls_with_blurbs(html)
+    _, blurb = results[0]
+    assert blurb is not None
+    assert len(blurb) <= 500
 
 
 def test_extract_body_html_preferred():
@@ -259,6 +313,19 @@ def test_fetch_new_emails_updates_watermark(mock_svc, session):
     assert get_watermark(session) is None
     fetch_new_emails(session)
     assert get_watermark(session) is not None
+
+
+@patch("src.gmail_client._get_gmail_service")
+def test_fetch_new_emails_stores_blurb(mock_svc, session):
+    """blurb is extracted and stored in NewsletterArticle."""
+    raw = _make_raw_email(
+        html_body='<p><a href="https://example.com/story">A major AI breakthrough was announced today</a> — researchers achieved a new SOTA result on reasoning benchmarks.</p>',
+    )
+    mock_svc.return_value = _build_mock_service(["msg001"], {"msg001": raw})
+    fetch_new_emails(session)
+    join = session.query(NewsletterArticle).one()
+    assert join.blurb is not None
+    assert "breakthrough" in join.blurb or "SOTA" in join.blurb
 
 
 @patch("src.gmail_client._get_gmail_service")

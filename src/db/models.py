@@ -103,12 +103,13 @@ class Article(Base):
 
 
 class NewsletterArticle(Base):
-    """Many-to-many join: newsletters ↔ articles."""
+    """Many-to-many join: newsletters ↔ articles, with the blurb the newsletter wrote about it."""
     __tablename__ = "newsletter_articles"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     newsletter_id: Mapped[int] = mapped_column(ForeignKey("newsletters.id"), nullable=False)
     article_id: Mapped[int] = mapped_column(ForeignKey("articles.id"), nullable=False)
+    blurb: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # surrounding text from the email
 
     newsletter: Mapped["Newsletter"] = relationship(back_populates="newsletter_articles")
     article: Mapped["Article"] = relationship(back_populates="newsletter_articles")

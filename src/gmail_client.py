@@ -35,10 +35,13 @@ SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
 # Only follow http/https links; skip mailto, cid, tracking pixels, etc.
 _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
-# Skip common tracking/unsubscribe domains and non-article paths
+# Skip common tracking/unsubscribe domains and non-article paths.
+# beehiiv tracking links (link.mail.beehiiv.com, email.beehiivstatus.com) never resolve
+# to real article content — they serve beehiiv profile/ad pages instead.
 _SKIP_URL_RE = re.compile(
-    r"(unsubscribe|optout|manage-preferences|click\.|track\.|open\.|beacon\.|pixel\.|"
+    r"(unsubscribe|optout|manage-preferences|click\.|track\.|open\.|beacon\.|pixel\.|n"
     r"mailchi\.mp/track|list-manage\.com|beehiiv\.com/(unsubscribe|manage)|"
+    r"link\.mail\.beehiiv\.com|email\.beehiivstatus\.com|"
     r"\.(png|jpg|jpeg|gif|webp|ico|css|js)(\?|$))",
     re.IGNORECASE,
 )
@@ -130,14 +133,41 @@ def _extract_body(msg) -> str:
     return html_part or text_part or ""
 
 
-def _extract_urls(html_body: str) -> list[str]:
+def _extract_blurb(anchor_tag) -> str | None:
     """
-    Parse hrefs from HTML body. Returns deduplicated list of http/https URLs,
-    excluding tracking links, unsubscribe pages, and image/asset URLs.
+    Extract a blurb (the newsletter author's description) for a link by walking up
+    the DOM to find the nearest block element with meaningful surrounding text.
+    Falls back to the link text itself if it is substantive (>= 15 chars).
+    Returns None if no meaningful context is found.
+    """
+    link_text = anchor_tag.get_text(strip=True)
+    node = anchor_tag.parent
+    for _ in range(6):
+        if node is None:
+            break
+        tag_name = getattr(node, "name", None)
+        if tag_name in ("p", "td", "li", "div", "section", "article", "blockquote"):
+            full_text = node.get_text(separator=" ", strip=True)
+            # Only use if there's substantively more text than just the link itself
+            if len(full_text) > len(link_text) + 25:
+                blurb = " ".join(full_text.split())  # normalise whitespace
+                return blurb[:500]
+        node = node.parent
+    # Fallback: use link text if it's a meaningful description (not just "Read more")
+    if len(link_text) >= 15:
+        return link_text[:500]
+    return None
+
+
+def _extract_urls_with_blurbs(html_body: str) -> list[tuple[str, str | None]]:
+    """
+    Parse hrefs from HTML body. Returns deduplicated list of (url, blurb) pairs
+    for http/https URLs, excluding tracking links, unsubscribe pages, and assets.
+    blurb is the newsletter author's surrounding description of the link, or None.
     """
     soup = BeautifulSoup(html_body, "lxml")
     seen: set[str] = set()
-    urls: list[str] = []
+    results: list[tuple[str, str | None]] = []
     for tag in soup.find_all("a", href=True):
         url: str = tag["href"].strip()
         if not _URL_RE.match(url):
@@ -148,8 +178,13 @@ def _extract_urls(html_body: str) -> list[str]:
         url = url.split("#")[0].rstrip("/?")
         if url and url not in seen:
             seen.add(url)
-            urls.append(url)
-    return urls
+            results.append((url, _extract_blurb(tag)))
+    return results
+
+
+def _extract_urls(html_body: str) -> list[str]:
+    """Compatibility wrapper — returns only URLs (blurbs discarded)."""
+    return [url for url, _ in _extract_urls_with_blurbs(html_body)]
 
 
 def _upsert_source(session: Session, sender_raw: str) -> NewsletterSource:
@@ -268,9 +303,12 @@ def fetch_new_emails(session: Session, since: Optional[datetime] = None) -> int:
         session.flush()
 
         # Extract article URLs and create pending Article records
-        urls = _extract_urls(body_raw)
-        for url in urls:
+        urls_and_blurbs = _extract_urls_with_blurbs(body_raw)
+        for url, blurb in urls_and_blurbs:
             article = session.query(Article).filter_by(url=url).first()
+            if article is None:
+                # Check if we've already fetched this canonical URL via a different tracking link
+                article = session.query(Article).filter_by(canonical_url=url).first()
             if article is None:
                 article = Article(url=url, processing_status=ProcessingStatus.pending)
                 session.add(article)
@@ -282,12 +320,18 @@ def fetch_new_emails(session: Session, since: Optional[datetime] = None) -> int:
             ).first()
             if existing_join is None:
                 session.add(NewsletterArticle(
-                    newsletter_id=newsletter.id, article_id=article.id
+                    newsletter_id=newsletter.id,
+                    article_id=article.id,
+                    blurb=blurb,
                 ))
+            elif blurb and not existing_join.blurb:
+                # Backfill blurb if we now have one and didn't before
+                existing_join.blurb = blurb
 
         session.commit()
         stored_count += 1
-        log.info("Stored [%d/%d] %s — %s (%d URLs)", stored_count, len(message_ids), source.sender_email, subject, len(urls))
+        blurb_count = sum(1 for _, b in urls_and_blurbs if b)
+        log.info("Stored [%d/%d] %s — %s (%d URLs, %d w/blurb)", stored_count, len(message_ids), source.sender_email, subject, len(urls_and_blurbs), blurb_count)
 
     set_watermark(session, fetch_start)
     session.commit()
