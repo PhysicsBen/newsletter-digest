@@ -30,10 +30,11 @@ from src.llm.client import call_llm
 
 log = logging.getLogger(__name__)
 
-_TOPIC_NAME_SYSTEM = """\
-You are an expert AI/ML analyst. Given article summaries sharing a common theme, identify that theme concisely.
-Respond in JSON: {"name": "Brief topic name (3-6 words)", "description": "One sentence describing this topic."}
-"""
+_TOPIC_NAME_BATCH_SYSTEM = """\
+You are an expert AI/ML analyst. You will be given multiple groups of article summaries, each under a numbered header.
+For each group, identify its theme concisely.
+Respond with a JSON array (one object per group, in order):
+[{"name": "Brief topic name (3-6 words)", "description": "One sentence describing this topic."}, ...]"""
 
 _WHAT_IS_NEW_SYSTEM = """\
 You are tracking an ongoing AI/ML topic across newsletter digests.
@@ -53,18 +54,34 @@ def _parse_json_response(raw: str) -> dict:
     return obj
 
 
-def _name_cluster(summary_texts: list[str]) -> tuple[str, str]:
-    """Call LLM to name and describe a topic cluster. Returns (name, description)."""
-    bullets = "\n".join(f"- {s}" for s in summary_texts[:5])
+def _name_cluster_batch(batch: list[tuple[int, list[str]]]) -> list[tuple[int, str, str]]:
+    """
+    Name a batch of clusters in a single LLM call.
+    batch: list of (label, [summary_text, ...])
+    Returns: list of (label, name, description)
+    """
+    sections = []
+    for i, (lbl, texts) in enumerate(batch):
+        bullets = "\n".join(f"  - {t}" for t in texts[:5])
+        sections.append(f"Group {i + 1}:\n{bullets}")
+    user_content = "\n\n".join(sections) + "\n\nBased on the information above, provide a JSON array with one name/description per group."
     raw = call_llm([
-        {"role": "system", "content": _TOPIC_NAME_SYSTEM},
-        {"role": "user", "content": (
-            f"{bullets}\n\n"
-            "Based on the information above, provide the topic name and description."
-        )},
+        {"role": "system", "content": _TOPIC_NAME_BATCH_SYSTEM},
+        {"role": "user", "content": user_content},
     ])
-    data = _parse_json_response(raw)
-    return str(data.get("name", "AI/ML Update")), str(data.get("description", ""))
+    # Parse JSON array
+    cleaned = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.DOTALL)
+    cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", cleaned).strip()
+    start = cleaned.find("[")
+    if start == -1:
+        # Fallback: treat as single object repeated
+        raise ValueError(f"No JSON array in response: {cleaned[:100]!r}")
+    arr, _ = json.JSONDecoder().raw_decode(cleaned[start:])
+    results = []
+    for i, (lbl, _) in enumerate(batch):
+        entry = arr[i] if i < len(arr) else {}
+        results.append((lbl, str(entry.get("name", "AI/ML Update")), str(entry.get("description", ""))))
+    return results
 
 
 def _generate_what_is_new(prior_summary: str, current_texts: list[str]) -> str:
@@ -154,29 +171,48 @@ def cluster_topics(session: Session, digest: Digest) -> int:
         agg_score = float(np.mean([s.significance_score or 0.0 for s in cluster_summaries]))
         cluster_items.append((label, indices, cluster_summaries, centroid, agg_score))
 
-    # Parallel LLM calls to name each cluster
-    log.info("Naming %d clusters via LLM (%d workers)", len(cluster_items), settings.llm_concurrency)
+    # Batch LLM calls to name clusters — 10 clusters per call
+    BATCH_SIZE = 10
+    batches: list[list[tuple[int, list[str]]]] = []
+    batch: list[tuple[int, list[str]]] = []
+    for label, indices, cluster_summaries, centroid, agg_score in cluster_items:
+        batch.append((label, [s.summary_text for s in cluster_summaries]))
+        if len(batch) == BATCH_SIZE:
+            batches.append(batch)
+            batch = []
+    if batch:
+        batches.append(batch)
+
+    n_calls = len(batches)
+    log.info(
+        "Naming %d clusters in %d batched LLM calls (%d workers)",
+        len(cluster_items), n_calls, settings.llm_concurrency,
+    )
     naming_results: dict[int, tuple[str, str]] = {}
 
-    def _name_item(item: tuple) -> tuple[int, str, str]:
-        lbl, _, cluster_summaries, _, _ = item
-        name, desc = _name_cluster([s.summary_text for s in cluster_summaries])
-        return lbl, name, desc
-
     done_count = 0
+    import time
+    start_time = time.monotonic()
     with concurrent.futures.ThreadPoolExecutor(max_workers=settings.llm_concurrency) as executor:
-        futs = {executor.submit(_name_item, item): item[0] for item in cluster_items}
+        futs = {executor.submit(_name_cluster_batch, b): b for b in batches}
         for fut in concurrent.futures.as_completed(futs):
-            lbl = futs[fut]
+            b = futs[fut]
             try:
-                _, name, desc = fut.result()
-                naming_results[lbl] = (name, desc)
+                for lbl, name, desc in fut.result():
+                    naming_results[lbl] = (name, desc)
             except Exception:
-                log.warning("Failed to name cluster %d — using fallback", lbl)
-                naming_results[lbl] = ("AI/ML Update", "")
+                log.warning("Batch naming failed — using fallback for %d clusters", len(b))
+                for lbl, _ in b:
+                    naming_results[lbl] = ("AI/ML Update", "")
             done_count += 1
-            if done_count % 50 == 0:
-                log.info("Named %d / %d clusters", done_count, len(cluster_items))
+            if done_count % 20 == 0:
+                elapsed = time.monotonic() - start_time
+                rate = done_count / elapsed
+                remaining = n_calls - done_count
+                log.info(
+                    "Named %d / %d batches  |  %.1f/min  |  ETA ~%.0f min",
+                    done_count, n_calls, rate * 60, remaining / rate / 60,
+                )
 
     # Persist Topic and DigestTopic records on the main thread
     now = datetime.now(timezone.utc).replace(tzinfo=None)
