@@ -7,6 +7,7 @@ chunked, each chunk summarized independently, then combined.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import re
@@ -144,9 +145,11 @@ def summarize_canonical_stories(session: Session) -> int:
     For each CanonicalStory without an ArticleSummary, call the LLM to generate
     a summary and significance score. Skips stories already summarized.
 
+    LLM calls run concurrently (settings.llm_concurrency workers); DB writes
+    happen on the calling thread after each future completes.
+
     Returns the number of stories summarized.
     """
-    # Stories that don't yet have a summary
     already_done = select(ArticleSummary.canonical_story_id)
     stmt = select(CanonicalStory).where(CanonicalStory.id.not_in(already_done))
     stories = list(session.scalars(stmt).all())
@@ -155,16 +158,16 @@ def summarize_canonical_stories(session: Session) -> int:
         log.info("All canonical stories already summarized")
         return 0
 
-    log.info("Summarizing %d canonical stories", len(stories))
-    count = 0
+    log.info("Summarizing %d canonical stories with %d workers", len(stories), settings.llm_concurrency)
 
+    # Collect all work up-front so DB reads stay on this thread.
+    pending: list[tuple[int, int, str, float]] = []  # (story_id, article_id, body_text, trust_weight)
     for story in stories:
         rep_article = session.get(Article, story.representative_article_id)
         if rep_article is None or not rep_article.body_text:
             log.warning("Skipping canonical_story %d — no body_text on representative article", story.id)
             continue
 
-        # Collect trust_weight from any linked newsletter source
         trust_weight = 1.0
         na = session.scalars(
             select(NewsletterArticle).where(NewsletterArticle.article_id == rep_article.id).limit(1)
@@ -172,25 +175,48 @@ def summarize_canonical_stories(session: Session) -> int:
         if na and na.newsletter and na.newsletter.source:
             trust_weight = na.newsletter.source.trust_weight
 
-        try:
-            summary_text, significance_score = _summarize_text(rep_article.body_text, trust_weight)
-        except Exception:
-            log.exception("LLM call failed for canonical_story %d — skipping", story.id)
-            continue
+        pending.append((story.id, rep_article.id, rep_article.body_text, trust_weight))
 
-        article_summary = ArticleSummary(
-            canonical_story_id=story.id,
-            article_id=rep_article.id,
-            summary_text=summary_text,
-            significance_score=significance_score,
-            model_used=settings.llm_model,
-            prompt_version=settings.prompt_version,
-        )
-        session.add(article_summary)
-        session.commit()
-        count += 1
-        if count % 50 == 0:
-            log.info("Summarized %d / %d canonical stories", count, len(stories))
+    def _worker(args: tuple[int, int, str, float]) -> tuple[int, int, str, float]:
+        """Called in a thread — no DB access. Returns (story_id, article_id, summary, score)."""
+        story_id, article_id, body_text, trust_weight = args
+        summary_text, significance_score = _summarize_text(body_text, trust_weight)
+        return story_id, article_id, summary_text, significance_score
+
+    count = 0
+    total = len(pending)
+    import time
+    start_time = time.monotonic()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=settings.llm_concurrency) as executor:
+        future_to_story = {executor.submit(_worker, p): p[0] for p in pending}
+        for future in concurrent.futures.as_completed(future_to_story):
+            story_id = future_to_story[future]
+            try:
+                sid, article_id, summary_text, significance_score = future.result()
+            except Exception:
+                log.exception("LLM call failed for canonical_story %d — skipping", story_id)
+                continue
+
+            session.add(ArticleSummary(
+                canonical_story_id=sid,
+                article_id=article_id,
+                summary_text=summary_text,
+                significance_score=significance_score,
+                model_used=settings.llm_model,
+                prompt_version=settings.prompt_version,
+            ))
+            session.commit()
+            count += 1
+            if count % 10 == 0:
+                elapsed = time.monotonic() - start_time
+                rate = count / elapsed
+                remaining = total - count
+                eta_min = remaining / rate / 60
+                log.info(
+                    "Summarized %d / %d  |  %.1f/min  |  ETA ~%.0f min",
+                    count, total, rate * 60, eta_min,
+                )
 
     log.info("Summarization complete: %d stories summarized", count)
     return count

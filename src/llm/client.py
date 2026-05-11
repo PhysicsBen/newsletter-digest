@@ -53,10 +53,17 @@ def call_llm(messages: list[dict], thinking: bool = False, **kwargs) -> str:
     response = litellm.completion(
         model=settings.llm_model,
         messages=messages,
+        num_retries=settings.llm_retries,
         **extra,
         **kwargs,
     )
-    return response.choices[0].message.content
+    content = response.choices[0].message.content
+    if content is None:
+        raise ValueError(
+            f"LLM returned None content (safety filter or empty response) "
+            f"for model {settings.llm_model}"
+        )
+    return content
 
 
 def _inject_qwen3_directive(messages: list[dict], directive: str) -> list[dict]:
