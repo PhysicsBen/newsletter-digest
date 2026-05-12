@@ -24,7 +24,8 @@ from sqlalchemy.orm import Session
 
 from src.config import settings
 from src.db.models import (
-    ArticleSummary, Digest, DigestTopic, Topic, TopicArticle, TopicStatus,
+    ArticleSummary, Digest, DigestTopic, Newsletter, NewsletterArticle,
+    Topic, TopicArticle, TopicStatus,
 )
 from src.llm.client import call_llm
 
@@ -99,7 +100,12 @@ def _generate_what_is_new(prior_summary: str, current_texts: list[str]) -> str:
     return str(data.get("what_is_new_text", ""))
 
 
-def cluster_topics(session: Session, digest: Digest) -> int:
+def cluster_topics(
+    session: Session,
+    digest: Digest,
+    date_start: datetime | None = None,
+    date_end: datetime | None = None,
+) -> int:
     """
     Embed article summaries for the current digest, cluster by cosine similarity,
     have the LLM name and describe each cluster, then match against existing Topic
@@ -108,15 +114,36 @@ def cluster_topics(session: Session, digest: Digest) -> int:
     For recurring topics: generates what_is_new_text by comparing the prior
     digest_topics.summary_text to the current articles.
 
+    When date_start/date_end are provided (backtest mode), summaries are filtered
+    to articles that appeared in newsletters within that date window instead of
+    using the "not yet assigned" filter.
+
     Returns the number of DigestTopic records created.
     """
-    # Load summaries not yet assigned to any TopicArticle (across all digests)
-    already_assigned = select(TopicArticle.article_id)
-    summaries = list(session.scalars(
-        select(ArticleSummary)
-        .where(ArticleSummary.summary_text.isnot(None))
-        .where(ArticleSummary.article_id.not_in(already_assigned))
-    ).all())
+    if date_start is not None or date_end is not None:
+        # Filter by newsletter send date — articles that appeared in newsletters
+        # within the requested window.
+        articles_in_window = (
+            select(NewsletterArticle.article_id)
+            .join(Newsletter, Newsletter.id == NewsletterArticle.newsletter_id)
+        )
+        if date_start is not None:
+            articles_in_window = articles_in_window.where(Newsletter.date >= date_start)
+        if date_end is not None:
+            articles_in_window = articles_in_window.where(Newsletter.date < date_end)
+        summaries = list(session.scalars(
+            select(ArticleSummary)
+            .where(ArticleSummary.summary_text.isnot(None))
+            .where(ArticleSummary.article_id.in_(articles_in_window))
+        ).all())
+    else:
+        # Normal mode: only summaries not yet assigned to any TopicArticle
+        already_assigned = select(TopicArticle.article_id)
+        summaries = list(session.scalars(
+            select(ArticleSummary)
+            .where(ArticleSummary.summary_text.isnot(None))
+            .where(ArticleSummary.article_id.not_in(already_assigned))
+        ).all())
 
     if not summaries:
         log.info("No new summaries to cluster into topics")
