@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     gmail_label: str = "AI Newsletters"
     gmail_credentials_path: str = "credentials.json"
     gmail_token_path: str = "token.json"
+    digest_recipient_email: str = ""  # Where to send digests; set in .env
 
     # Database
     database_url: str = "sqlite:///data/newsletter.db"

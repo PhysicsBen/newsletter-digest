@@ -26,7 +26,9 @@ from src.llm.deduplicator import cluster_into_canonical_stories
 from src.llm.summarizer import summarize_canonical_stories
 from src.llm.topic_clusterer import cluster_topics
 from src.llm.digest_writer import write_digest
+from src.email_sender import send_all_digests, send_digest_file
 from src.db.models import Digest
+from src.config import settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,11 +38,12 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-def run_backtest(n_weeks: int) -> None:
+def run_backtest(n_weeks: int, send: bool = False) -> None:
     """Generate one digest per week for the last n_weeks weeks.
 
     Skips phases 1-4 (data must already be ingested and summarized).
     Processes weeks oldest-first so topic continuity accumulates naturally.
+    If send=True, emails each digest to settings.digest_recipient_email after writing it.
     """
     init_db()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -78,6 +81,10 @@ def run_backtest(n_weeks: int) -> None:
             log.info("Digest written to %s", output_path)
 
             session.commit()
+
+        if send:
+            from pathlib import Path
+            send_digest_file(Path(output_path), settings.digest_recipient_email)
 
 
 def run(since: datetime | None = None) -> None:
@@ -134,9 +141,23 @@ def main() -> None:
         metavar="N",
         help="Generate N weekly digests going back N weeks (phases 5-6 only, data must exist).",
     )
+    parser.add_argument(
+        "--send",
+        action="store_true",
+        help="Email each digest to DIGEST_RECIPIENT_EMAIL after generating it (use with --backtest).",
+    )
+    parser.add_argument(
+        "--send-digests",
+        action="store_true",
+        help="Email all existing digest files in output/ to DIGEST_RECIPIENT_EMAIL.",
+    )
     args = parser.parse_args()
-    if args.backtest:
-        run_backtest(args.backtest)
+
+    if args.send_digests:
+        sent = send_all_digests(recipient=settings.digest_recipient_email)
+        log.info("Sent %d digest(s)", sent)
+    elif args.backtest:
+        run_backtest(args.backtest, send=args.send)
     else:
         run(since=args.since)
 

@@ -31,7 +31,10 @@ from src.db.models import Article, Newsletter, NewsletterArticle, NewsletterSour
 log = logging.getLogger(__name__)
 
 WATERMARK_KEY = "gmail_last_fetch"
-SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+SCOPES = [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+]
 
 # Only follow http/https links; skip mailto, cid, tracking pixels, etc.
 _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
@@ -55,6 +58,11 @@ def _get_credentials() -> Credentials:
     creds: Optional[Credentials] = None
     if os.path.exists(settings.gmail_token_path):
         creds = Credentials.from_authorized_user_file(settings.gmail_token_path, SCOPES)
+        # Force re-auth if the stored token is missing required scopes (e.g. gmail.send
+        # was added after the initial auth).
+        if creds and creds.scopes and not set(SCOPES).issubset(creds.scopes):
+            log.info("Stored token is missing required scopes — re-authenticating")
+            creds = None
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
