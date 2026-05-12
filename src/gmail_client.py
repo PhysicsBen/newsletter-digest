@@ -20,6 +20,7 @@ from email.utils import parseaddr, parsedate_to_datetime
 from typing import Optional
 
 from bs4 import BeautifulSoup
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -58,16 +59,20 @@ def _get_credentials() -> Credentials:
     creds: Optional[Credentials] = None
     if os.path.exists(settings.gmail_token_path):
         creds = Credentials.from_authorized_user_file(settings.gmail_token_path, SCOPES)
-        # Force re-auth if the stored token is missing required scopes (e.g. gmail.send
-        # was added after the initial auth).
-        if creds and creds.scopes and not set(SCOPES).issubset(creds.scopes):
+        # Force re-auth if the stored token has no scopes recorded OR is missing
+        # a required scope (e.g. gmail.send was added after initial auth).
+        if creds and (not creds.scopes or not set(SCOPES).issubset(creds.scopes)):
             log.info("Stored token is missing required scopes — re-authenticating")
             creds = None
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except RefreshError:
+                log.info("Token refresh failed (likely scope change) — re-authenticating")
+                creds = None
+        if not creds or not creds.valid:
             flow = InstalledAppFlow.from_client_secrets_file(
                 settings.gmail_credentials_path, SCOPES
             )
