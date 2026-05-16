@@ -51,8 +51,8 @@ When generating or modifying the summarizer system prompt, preserve this rubric 
 ## Token budget
 Articles are truncated to ~6000 tokens before the LLM call. Articles exceeding this are chunked → each chunk summarized independently → chunk summaries combined into a final summary. This logic lives in `src/llm/summarizer.py` and is transparent to callers.
 
-## LLM model — gemini-3-flash-preview
-The project uses `gemini/gemini-3-flash-preview` via LiteLLM. Critical Gemini 3-specific rules:
+## LLM model — gemini-3.1-flash-lite
+The project uses `gemini/gemini-3.1-flash-lite` via LiteLLM (GA model, migrated from `gemini-3-flash-preview` May 2026). Critical Gemini 3-specific rules:
 
 - **Temperature MUST stay at 1.0 (default).** Never set it lower — Gemini 3 will loop or degrade on complex tasks if temperature is changed.
 - **Use `thinking_level`, not `thinking_budget`** (deprecated). Set via config; default is `low` for this project to control cost on high-volume summarization.
@@ -60,7 +60,7 @@ The project uses `gemini/gemini-3-flash-preview` via LiteLLM. Critical Gemini 3-
 - **Long-context prompts:** place article content first, then the instruction at the end, anchored with "Based on the information above...".
 - **Thought signatures** are managed automatically by LiteLLM — never manually extract or re-inject them.
 - **Context window:** 1M tokens input / 64k output. Token budget truncation at ~6000 tokens per article is still required to control cost, not because of limits.
-- **LiteLLM model string:** `gemini/gemini-3-flash-preview` — always read from `config.LLM_MODEL`, never hardcode.
+- **LiteLLM model string:** `gemini/gemini-3.1-flash-lite` — always read from `config.LLM_MODEL`, never hardcode.
 
 ## Key dependencies
 - `litellm` — LLM abstraction (not openai/anthropic SDK directly)
