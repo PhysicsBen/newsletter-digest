@@ -109,7 +109,7 @@ def run(since: datetime | None = None) -> None:
 
         digest = Digest(
             date_range_start=since,
-            date_range_end=datetime.utcnow(),
+            date_range_end=datetime.now(timezone.utc).replace(tzinfo=None),
         )
         session.add(digest)
         session.flush()

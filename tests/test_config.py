@@ -10,7 +10,7 @@ def test_settings_defaults():
     from src.config import Settings
 
     s = Settings()
-    assert s.llm_model == "gemini/gemini-3-flash-preview"
+    assert s.llm_model == "gemini/gemini-3.1-flash-lite"
     assert s.llm_thinking_level == "low"
     assert s.prompt_version == "v1.0"
     assert s.staleness_days == 30

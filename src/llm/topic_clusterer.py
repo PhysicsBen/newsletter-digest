@@ -11,12 +11,11 @@ import concurrent.futures
 import json
 import logging
 import re
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 
 import numpy as np
-import torch
-from sentence_transformers import SentenceTransformer
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics.pairwise import cosine_similarity
 from sqlalchemy import select
@@ -28,6 +27,7 @@ from src.db.models import (
     Topic, TopicArticle, TopicStatus,
 )
 from src.llm.client import call_llm
+from src.llm.deduplicator import _get_model as _get_embedding_model
 
 log = logging.getLogger(__name__)
 
@@ -150,8 +150,7 @@ def cluster_topics(
         return 0
 
     log.info("Embedding %d summaries for topic clustering", len(summaries))
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = SentenceTransformer(settings.embedding_model, device=device)
+    model = _get_embedding_model()
     texts = [s.summary_text for s in summaries]
     embeddings = model.encode(
         texts, batch_size=64, show_progress_bar=True, normalize_embeddings=True
@@ -218,7 +217,6 @@ def cluster_topics(
     naming_results: dict[int, tuple[str, str]] = {}
 
     done_count = 0
-    import time
     start_time = time.monotonic()
     with concurrent.futures.ThreadPoolExecutor(max_workers=settings.llm_concurrency) as executor:
         futs = {executor.submit(_name_cluster_batch, b): b for b in batches}

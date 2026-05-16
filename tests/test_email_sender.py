@@ -234,7 +234,7 @@ def _mock_gmail_service():
 
 def test_send_digest_file_calls_gmail_api(tmp_digest: Path):
     service = _mock_gmail_service()
-    with patch("src.email_sender._get_credentials", return_value=MagicMock()), \
+    with patch("src.email_sender._get_send_credentials", return_value=MagicMock()), \
          patch("src.email_sender.build", return_value=service):
         send_digest_file(tmp_digest, "test@example.com")
 
@@ -259,7 +259,7 @@ def test_send_all_digests_sends_each_file(tmp_path: Path):
         (tmp_path / name).write_text("# Digest", encoding="utf-8")
 
     service = _mock_gmail_service()
-    with patch("src.email_sender._get_credentials", return_value=MagicMock()), \
+    with patch("src.email_sender._get_send_credentials", return_value=MagicMock()), \
          patch("src.email_sender.build", return_value=service), \
          patch("src.email_sender._SEND_DELAY_S", 0):
         count = send_all_digests(digest_dir=tmp_path, recipient="test@example.com")
@@ -277,7 +277,7 @@ def test_send_all_digests_raises_if_no_recipient(tmp_path: Path):
 
 def test_send_all_digests_empty_dir(tmp_path: Path):
     service = _mock_gmail_service()
-    with patch("src.email_sender._get_credentials", return_value=MagicMock()), \
+    with patch("src.email_sender._get_send_credentials", return_value=MagicMock()), \
          patch("src.email_sender.build", return_value=service):
         count = send_all_digests(digest_dir=tmp_path, recipient="test@example.com")
 
@@ -308,7 +308,7 @@ def test_send_all_digests_sorted_oldest_first(tmp_path: Path):
     service = MagicMock()
     service.users.return_value.messages.return_value.send.side_effect = capture_send
 
-    with patch("src.email_sender._get_credentials", return_value=MagicMock()), \
+    with patch("src.email_sender._get_send_credentials", return_value=MagicMock()), \
          patch("src.email_sender.build", return_value=service), \
          patch("src.email_sender._SEND_DELAY_S", 0):
         send_all_digests(digest_dir=tmp_path, recipient="test@example.com")

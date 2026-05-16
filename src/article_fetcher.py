@@ -89,7 +89,6 @@ def fetch_pending_articles(session: Session) -> tuple[int, int]:
             except Exception as exc:
                 log.warning("Failed to fetch %s: %s", article.url, exc)
                 article.processing_status = ProcessingStatus.failed
-                done_count  # don't increment
                 failed_count += 1
 
             session.commit()
@@ -123,6 +122,9 @@ def _fetch_one(session: Session, client: httpx.Client, article: Article, canonic
         response = client.get(canonical_url)
     except (httpx.TimeoutException, httpx.RequestError) as exc:
         raise RuntimeError(f"HTTP error: {exc}") from exc
+
+    article.http_status = response.status_code
+    article.fetched_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # Store the final URL after any redirects (resolves tracking/redirect links)
     final_url = str(response.url)

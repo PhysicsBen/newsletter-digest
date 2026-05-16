@@ -117,7 +117,7 @@ def test_date_range_filters_summaries(session):
     session.add(digest)
     session.flush()
 
-    model_path = "src.llm.topic_clusterer.SentenceTransformer"
+    model_path = "src.llm.topic_clusterer._get_embedding_model"
     llm_path = "src.llm.topic_clusterer.call_llm"
 
     mock_model = type("M", (), {"encode": staticmethod(_fake_encode)})()
@@ -149,7 +149,7 @@ def test_out_of_window_article_excluded(session):
 
     mock_model = type("M", (), {"encode": staticmethod(_fake_encode)})()
 
-    with patch("src.llm.topic_clusterer.SentenceTransformer", return_value=mock_model), \
+    with patch("src.llm.topic_clusterer._get_embedding_model", return_value=mock_model), \
          patch("src.llm.topic_clusterer.call_llm", side_effect=_fake_llm):
         count = cluster_topics(session, digest, date_start=week_start, date_end=week_end)
 
@@ -185,7 +185,7 @@ def test_no_date_filter_uses_unassigned(session):
 
     mock_model = type("M", (), {"encode": staticmethod(_fake_encode)})()
 
-    with patch("src.llm.topic_clusterer.SentenceTransformer", return_value=mock_model), \
+    with patch("src.llm.topic_clusterer._get_embedding_model", return_value=mock_model), \
          patch("src.llm.topic_clusterer.call_llm", side_effect=_fake_llm):
         count = cluster_topics(session, digest)
 

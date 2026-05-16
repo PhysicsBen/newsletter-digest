@@ -22,9 +22,46 @@ import markdown as md
 from googleapiclient.discovery import build
 
 from src.config import settings
-from src.gmail_client import _get_credentials
 
 log = logging.getLogger(__name__)
+
+_SEND_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+]
+
+
+def _get_send_credentials():
+    """Load OAuth2 credentials with gmail.send scope."""
+    import os
+    from typing import Optional
+    from google.auth.exceptions import RefreshError
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
+    creds: Optional[Credentials] = None
+    if os.path.exists(settings.gmail_token_path):
+        creds = Credentials.from_authorized_user_file(settings.gmail_token_path, _SEND_SCOPES)
+        if creds and (not creds.scopes or not set(_SEND_SCOPES).issubset(creds.scopes)):
+            creds = None
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            try:
+                creds.refresh(Request())
+            except RefreshError:
+                creds = None
+        if not creds or not creds.valid:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                settings.gmail_credentials_path, _SEND_SCOPES
+            )
+            creds = flow.run_local_server(port=0)
+
+        with open(settings.gmail_token_path, "w") as f:
+            f.write(creds.to_json())
+
+    return creds
 
 # Seconds to wait between sends to stay well within Gmail's sending rate limit.
 _SEND_DELAY_S = 2
@@ -465,7 +502,7 @@ def send_digest_file(path: Path, recipient: str) -> None:
     subject = _subject_from_path(path)
     body = path.read_text(encoding="utf-8")
 
-    creds = _get_credentials()
+    creds = _get_send_credentials()
     service = build("gmail", "v1", credentials=creds, cache_discovery=False)
 
     message = _build_message(recipient, subject, body)
@@ -493,7 +530,7 @@ def send_all_digests(digest_dir: Path | None = None, recipient: str | None = Non
         log.info("No digest files found in %s", digest_dir)
         return 0
 
-    creds = _get_credentials()
+    creds = _get_send_credentials()
     service = build("gmail", "v1", credentials=creds, cache_discovery=False)
 
     sent = 0

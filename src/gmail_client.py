@@ -34,7 +34,6 @@ log = logging.getLogger(__name__)
 WATERMARK_KEY = "gmail_last_fetch"
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.send",
 ]
 
 # Only follow http/https links; skip mailto, cid, tracking pixels, etc.
@@ -285,66 +284,71 @@ def fetch_new_emails(session: Session, since: Optional[datetime] = None) -> int:
         if session.query(Newsletter).filter_by(gmail_id=gmail_id).first():
             continue
 
-        # Fetch full message (raw format gives us the original RFC 2822 bytes)
-        raw = service.users().messages().get(
-            userId="me", id=gmail_id, format="raw"
-        ).execute()
-
-        raw_bytes = base64.urlsafe_b64decode(raw["raw"] + "==")
-        msg = message_from_bytes(raw_bytes)
-
-        sender_raw = msg.get("From", "")
-        subject = _decode_str(msg.get("Subject", ""))
-        date_str = msg.get("Date", "")
         try:
-            email_date = parsedate_to_datetime(date_str) if date_str else None
-        except Exception:
-            email_date = None
+            # Fetch full message (raw format gives us the original RFC 2822 bytes)
+            raw = service.users().messages().get(
+                userId="me", id=gmail_id, format="raw"
+            ).execute()
 
-        body_raw = _extract_body(msg)
-        source = _upsert_source(session, sender_raw)
+            raw_bytes = base64.urlsafe_b64decode(raw["raw"] + "==")
+            msg = message_from_bytes(raw_bytes)
 
-        newsletter = Newsletter(
-            gmail_id=gmail_id,
-            source_id=source.id,
-            sender=sender_raw,
-            subject=subject,
-            date=email_date,
-            body_raw=body_raw,
-        )
-        session.add(newsletter)
-        session.flush()
+            sender_raw = msg.get("From", "")
+            subject = _decode_str(msg.get("Subject", ""))
+            date_str = msg.get("Date", "")
+            try:
+                email_date = parsedate_to_datetime(date_str) if date_str else None
+            except Exception:
+                email_date = None
 
-        # Extract article URLs and create pending Article records
-        urls_and_blurbs = _extract_urls_with_blurbs(body_raw)
-        for url, blurb in urls_and_blurbs:
-            article = session.query(Article).filter_by(url=url).first()
-            if article is None:
-                # Check if we've already fetched this canonical URL via a different tracking link
-                article = session.query(Article).filter_by(canonical_url=url).first()
-            if article is None:
-                article = Article(url=url, processing_status=ProcessingStatus.pending)
-                session.add(article)
-                session.flush()
+            body_raw = _extract_body(msg)
+            source = _upsert_source(session, sender_raw)
 
-            # Create join record if it doesn't exist yet
-            existing_join = session.query(NewsletterArticle).filter_by(
-                newsletter_id=newsletter.id, article_id=article.id
-            ).first()
-            if existing_join is None:
-                session.add(NewsletterArticle(
-                    newsletter_id=newsletter.id,
-                    article_id=article.id,
-                    blurb=blurb,
-                ))
-            elif blurb and not existing_join.blurb:
-                # Backfill blurb if we now have one and didn't before
-                existing_join.blurb = blurb
+            newsletter = Newsletter(
+                gmail_id=gmail_id,
+                source_id=source.id,
+                sender=sender_raw,
+                subject=subject,
+                date=email_date,
+                body_raw=body_raw,
+            )
+            session.add(newsletter)
+            session.flush()
 
-        session.commit()
-        stored_count += 1
-        blurb_count = sum(1 for _, b in urls_and_blurbs if b)
-        log.info("Stored [%d/%d] %s — %s (%d URLs, %d w/blurb)", stored_count, len(message_ids), source.sender_email, subject, len(urls_and_blurbs), blurb_count)
+            # Extract article URLs and create pending Article records
+            urls_and_blurbs = _extract_urls_with_blurbs(body_raw)
+            for url, blurb in urls_and_blurbs:
+                article = session.query(Article).filter_by(url=url).first()
+                if article is None:
+                    # Check if we've already fetched this canonical URL via a different tracking link
+                    article = session.query(Article).filter_by(canonical_url=url).first()
+                if article is None:
+                    article = Article(url=url, processing_status=ProcessingStatus.pending)
+                    session.add(article)
+                    session.flush()
+
+                # Create join record if it doesn't exist yet
+                existing_join = session.query(NewsletterArticle).filter_by(
+                    newsletter_id=newsletter.id, article_id=article.id
+                ).first()
+                if existing_join is None:
+                    session.add(NewsletterArticle(
+                        newsletter_id=newsletter.id,
+                        article_id=article.id,
+                        blurb=blurb,
+                    ))
+                elif blurb and not existing_join.blurb:
+                    # Backfill blurb if we now have one and didn't before
+                    existing_join.blurb = blurb
+
+            session.commit()
+            stored_count += 1
+            blurb_count = sum(1 for _, b in urls_and_blurbs if b)
+            log.info("Stored [%d/%d] %s — %s (%d URLs, %d w/blurb)", stored_count, len(message_ids), source.sender_email, subject, len(urls_and_blurbs), blurb_count)
+
+        except Exception as exc:
+            log.warning("Skipping email %s due to error: %s", gmail_id, exc)
+            session.rollback()
 
     set_watermark(session, fetch_start)
     session.commit()

@@ -11,6 +11,7 @@ import concurrent.futures
 import json
 import logging
 import re
+import time
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -185,7 +186,6 @@ def summarize_canonical_stories(session: Session) -> int:
 
     count = 0
     total = len(pending)
-    import time
     start_time = time.monotonic()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=settings.llm_concurrency) as executor:
