@@ -3,6 +3,7 @@ google-auth-oauthlib>=1.0.0
 trafilatura>=1.8.0
 sqlalchemy>=2.0.0
 alembic>=1.13.0
+psycopg2-binary>=2.9.0
 litellm>=1.40.0
 sentence-transformers>=3.0.0
 scikit-learn>=1.4.0

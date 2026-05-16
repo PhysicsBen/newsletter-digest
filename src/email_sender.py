@@ -33,6 +33,7 @@ _SEND_SCOPES = [
 
 def _get_send_credentials():
     """Load OAuth2 credentials with gmail.send scope."""
+    import json
     import os
     from typing import Optional
     from google.auth.exceptions import RefreshError
@@ -40,11 +41,18 @@ def _get_send_credentials():
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
 
+    headless = bool(settings.gmail_token_json)
     creds: Optional[Credentials] = None
-    if os.path.exists(settings.gmail_token_path):
+
+    if settings.gmail_token_json:
+        creds = Credentials.from_authorized_user_info(
+            json.loads(settings.gmail_token_json), _SEND_SCOPES
+        )
+    elif os.path.exists(settings.gmail_token_path):
         creds = Credentials.from_authorized_user_file(settings.gmail_token_path, _SEND_SCOPES)
-        if creds and (not creds.scopes or not set(_SEND_SCOPES).issubset(creds.scopes)):
-            creds = None
+
+    if creds and (not creds.scopes or not set(_SEND_SCOPES).issubset(creds.scopes)):
+        creds = None
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -53,13 +61,19 @@ def _get_send_credentials():
             except RefreshError:
                 creds = None
         if not creds or not creds.valid:
+            if headless:
+                raise RuntimeError(
+                    "Gmail send credentials are invalid or expired and no browser is available. "
+                    "Re-generate token.json locally (with gmail.send scope) and update GMAIL_TOKEN_JSON."
+                )
             flow = InstalledAppFlow.from_client_secrets_file(
                 settings.gmail_credentials_path, _SEND_SCOPES
             )
             creds = flow.run_local_server(port=0)
 
-        with open(settings.gmail_token_path, "w") as f:
-            f.write(creds.to_json())
+        if not headless:
+            with open(settings.gmail_token_path, "w") as f:
+                f.write(creds.to_json())
 
     return creds
 

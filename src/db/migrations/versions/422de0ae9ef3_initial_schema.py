@@ -152,4 +152,10 @@ def downgrade() -> None:
     op.drop_table('newsletter_sources')
     op.drop_table('digests')
     op.drop_table('canonical_stories')
+    # Drop Postgres enum types created implicitly by sa.Enum(name=...).
+    # SQLite has no CREATE TYPE so this block is skipped there.
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.execute(sa.text("DROP TYPE IF EXISTS processingstatus"))
+        op.execute(sa.text("DROP TYPE IF EXISTS topicstatus"))
     # ### end Alembic commands ###
