@@ -49,12 +49,11 @@ print(t.get("scopes"))
 
 ---
 
-## Step 3 — Create a new Railway project
+## Step 3 — Link the CLI to your existing Railway project
 
 ```bash
 railway login
-railway init          # choose "Empty Project", name it e.g. "newsletter-digest"
-railway link          # if you created it in the dashboard instead
+railway link          # select your existing project from the list
 ```
 
 ---
