@@ -18,6 +18,7 @@ from email import message_from_bytes
 from email.header import decode_header, make_header
 from email.utils import parseaddr, parsedate_to_datetime
 from typing import Optional
+from urllib.parse import unquote, urlparse
 
 from bs4 import BeautifulSoup
 from google.auth.exceptions import RefreshError
@@ -41,13 +42,38 @@ _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 # Skip common tracking/unsubscribe domains and non-article paths.
 # beehiiv tracking links (link.mail.beehiiv.com, email.beehiivstatus.com) never resolve
 # to real article content — they serve beehiiv profile/ad pages instead.
+# substack.com/redirect/ URLs are JWT-encoded subscribe/manage/unsubscribe flows.
+# substack.com/app-link/ URLs are mobile app deep-links, not article content.
+# linkedin.com/in/ URLs are profile pages that block scrapers (HTTP 999).
 _SKIP_URL_RE = re.compile(
     r"(unsubscribe|optout|manage-preferences|click\.|track\.|open\.|beacon\.|pixel\.|n"
     r"mailchi\.mp/track|list-manage\.com|beehiiv\.com/(unsubscribe|manage)|"
     r"link\.mail\.beehiiv\.com|email\.beehiivstatus\.com|"
+    r"substack\.com/(redirect|app-link)/|"
+    r"linkedin\.com/in/|"
     r"\.(png|jpg|jpeg|gif|webp|ico|css|js)(\?|$))",
     re.IGNORECASE,
 )
+
+
+def _unwrap_tracking_url(url: str) -> str:
+    """Decode single-hop tracking wrappers to recover the real target URL.
+
+    Handles TLDR newsletter tracking links of the form:
+        https://tracking.tldrnewsletter.com/CL0/{percent-encoded-url}/{hash_segments}
+
+    Slashes inside the encoded URL are represented as %2F so the first literal
+    '/' after 'CL0/' marks the end of the encoded target URL.
+    Returns the original URL unchanged for all other domains.
+    """
+    parsed = urlparse(url)
+    if parsed.netloc == "tracking.tldrnewsletter.com":
+        parts = parsed.path.split("/")  # ['', 'CL0', 'encoded_url', 'hash', ...]
+        if len(parts) >= 3 and parts[1] == "CL0":
+            real = unquote(parts[2])
+            if _URL_RE.match(real):
+                return real
+    return url
 
 
 def _get_credentials() -> Credentials:
@@ -205,6 +231,8 @@ def _extract_urls_with_blurbs(html_body: str) -> list[tuple[str, str | None]]:
         url: str = tag["href"].strip()
         if not _URL_RE.match(url):
             continue
+        # Decode tracking wrappers (e.g. TLDR) before applying skip rules
+        url = _unwrap_tracking_url(url)
         if _SKIP_URL_RE.search(url):
             continue
         # Strip fragment

@@ -27,7 +27,7 @@ from src.llm.summarizer import summarize_canonical_stories
 from src.llm.topic_clusterer import cluster_topics
 from src.llm.digest_writer import write_digest
 from src.email_sender import send_all_digests, send_digest_file
-from src.db.models import Digest
+from src.db.models import Article, Digest, ProcessingStatus
 from src.config import settings
 
 logging.basicConfig(
@@ -151,7 +151,24 @@ def main() -> None:
         action="store_true",
         help="Email all existing digest files in output/ to DIGEST_RECIPIENT_EMAIL.",
     )
+    parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Reset all failed articles back to pending so they are re-fetched on this run.",
+    )
     args = parser.parse_args()
+
+    if args.retry_failed:
+        init_db()
+        with get_session() as session:
+            from sqlalchemy import update
+            result = session.execute(
+                update(Article)
+                .where(Article.processing_status == ProcessingStatus.failed)
+                .values(processing_status=ProcessingStatus.pending)
+            )
+            session.commit()
+            log.info("Reset %d failed articles back to pending", result.rowcount)
 
     if args.send_digests:
         sent = send_all_digests(recipient=settings.digest_recipient_email)

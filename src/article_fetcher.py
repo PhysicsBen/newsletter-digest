@@ -102,7 +102,9 @@ def fetch_pending_articles(session: Session) -> tuple[int, int]:
 
             try:
                 _fetch_one(session, client, article, canonical)
-                done_count += 1
+                if article.processing_status == ProcessingStatus.done:
+                    done_count += 1
+                # else: rate-limited (pending) — not counted as done or failed
             except Exception as exc:
                 log.warning("Failed to fetch %s: %s", article.url, exc)
                 article.processing_status = ProcessingStatus.failed
@@ -150,6 +152,12 @@ def _fetch_one(session: Session, client: httpx.Client, article: Article, canonic
     if response.status_code == 403:
         article.is_paywalled = True
         article.processing_status = ProcessingStatus.done
+        return
+
+    if response.status_code == 429:
+        # Transient rate-limit — leave as pending so the next pipeline run retries
+        article.processing_status = ProcessingStatus.pending
+        log.debug("Rate limited on %s — will retry next run", canonical_url)
         return
 
     if response.status_code >= 400:
