@@ -465,12 +465,18 @@ def _render_email_html(markdown_text: str) -> str:
 </html>"""
 
 
+def _normalise_recipients(recipient: str) -> str:
+    """Accept comma- or semicolon-separated addresses and return a comma-separated string."""
+    addrs = [a.strip() for a in re.split(r"[;,]", recipient) if a.strip()]
+    return ", ".join(addrs)
+
+
 def _build_message(recipient: str, subject: str, markdown_body: str) -> dict:
     """Build a Gmail API message dict from a Markdown body."""
     html_body = _render_email_html(markdown_body)
 
     msg = MIMEMultipart("alternative")
-    msg["To"] = recipient
+    msg["To"] = _normalise_recipients(recipient)
     msg["From"] = "me"
     msg["Subject"] = subject
 
