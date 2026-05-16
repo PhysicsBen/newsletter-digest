@@ -54,6 +54,9 @@ ORDERED_TABLES = [
 ]
 
 
+BATCH_SIZE = 500
+
+
 def copy_table(src_conn, dst_conn, table: str) -> int:
     """Copy all rows from src to dst for one table. Returns rows inserted."""
     rows = src_conn.execute(text(f"SELECT * FROM {table}")).mappings().all()
@@ -70,9 +73,12 @@ def copy_table(src_conn, dst_conn, table: str) -> int:
         f"INSERT INTO {table} ({col_list}) VALUES ({placeholders}) ON CONFLICT DO NOTHING"
     )
     inserted = 0
-    for row in rows:
-        result = dst_conn.execute(stmt, dict(row))
+    for i in range(0, len(rows), BATCH_SIZE):
+        batch = [dict(r) for r in rows[i : i + BATCH_SIZE]]
+        result = dst_conn.execute(stmt, batch)
         inserted += result.rowcount
+        if len(rows) > BATCH_SIZE:
+            log.info("  %s — %d / %d rows …", table, min(i + BATCH_SIZE, len(rows)), len(rows))
 
     log.info("  %s — %d / %d rows inserted", table, inserted, len(rows))
     return inserted
