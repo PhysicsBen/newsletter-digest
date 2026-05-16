@@ -157,6 +157,7 @@ def _fetch_one(session: Session, client: httpx.Client, article: Article, canonic
         article.is_paywalled = True
 
     article.body_text = body
+    article.title = (data.get("title") or "").strip() or None
 
     pub_date = data.get("date")
     if pub_date:

@@ -20,6 +20,56 @@ log = logging.getLogger(__name__)
 
 OUTPUT_DIR = Path("output")
 
+_GENERIC_TOPIC_NAMES = {"ai/ml update", "ai update", "ml update"}
+_MAX_TITLE_LEN = 90
+
+
+def _first_sentence(text: str, max_len: int = _MAX_TITLE_LEN) -> str:
+    """Return the first sentence of text, truncated to max_len chars."""
+    # Split on '. ' or '.\n' to find sentence boundary
+    for sep in (". ", ".\n", "! ", "? "):
+        idx = text.find(sep)
+        if 0 < idx < max_len:
+            return text[: idx + 1].strip()
+    # No sentence boundary found — truncate at word boundary
+    if len(text) <= max_len:
+        return text.strip()
+    truncated = text[:max_len].rsplit(" ", 1)[0]
+    return truncated.strip() + "…"
+
+
+def _derive_section_title(
+    session: "Session",
+    topic_articles: list,
+    topic_name: str,
+) -> str:
+    """
+    Return a descriptive title for a digest section.
+
+    Priority:
+    1. article.title from the first article that has one
+    2. First sentence of the first article's summary_text
+    3. topic_name (fallback)
+    """
+    # Try article titles first
+    for ta in topic_articles:
+        article = session.get(Article, ta.article_id)
+        if article and article.title and article.title.strip():
+            return article.title.strip()
+
+    # Fall back to first sentence of first summary
+    for ta in topic_articles:
+        article_summary = session.scalars(
+            select(ArticleSummary).where(ArticleSummary.article_id == ta.article_id)
+        ).first()
+        if article_summary and article_summary.summary_text:
+            title = _first_sentence(article_summary.summary_text)
+            if title:
+                return title
+
+    # Last resort: topic_name
+    return topic_name
+
 
 def write_digest(session: Session, digest: Digest) -> str:
     """
@@ -41,6 +91,9 @@ def write_digest(session: Session, digest: Digest) -> str:
         .where(DigestTopic.digest_id == digest.id)
         .order_by(DigestTopic.significance_score.desc())
     ).all())
+
+    # Apply significance filter up front so counts are accurate
+    digest_topics = [dt for dt in digest_topics if (dt.significance_score or 0.0) >= 5.0]
 
     now = digest.date_range_end or datetime.now(timezone.utc).replace(tzinfo=None)
     stale_cutoff = timedelta(days=settings.staleness_days)
@@ -66,8 +119,8 @@ def write_digest(session: Session, digest: Digest) -> str:
     ]
 
     for dt in digest_topics:
-        topic = dt.topic
         score = dt.significance_score or 0.0
+        topic = dt.topic
 
         if score >= 7.0:
             badge = "HIGH"
@@ -76,13 +129,6 @@ def write_digest(session: Session, digest: Digest) -> str:
         else:
             badge = "LOW"
 
-        lines.append(f"## {topic.name}  ·  {badge} {score:.1f}")
-        lines.append("")
-
-        if dt.what_is_new_text:
-            lines.append(f"> **What's new:** {dt.what_is_new_text}")
-            lines.append("")
-
         topic_articles = list(session.scalars(
             select(TopicArticle)
             .where(
@@ -90,6 +136,16 @@ def write_digest(session: Session, digest: Digest) -> str:
                 TopicArticle.digest_id == digest.id,
             )
         ).all())
+
+        # Derive a descriptive title for the section from the first article
+        section_title = _derive_section_title(session, topic_articles, topic.name)
+
+        lines.append(f"## {section_title}  ·  {badge} {score:.1f}")
+        lines.append("")
+
+        if dt.what_is_new_text:
+            lines.append(f"> **What's new:** {dt.what_is_new_text}")
+            lines.append("")
 
         for ta in topic_articles:
             article = session.get(Article, ta.article_id)
@@ -100,7 +156,6 @@ def write_digest(session: Session, digest: Digest) -> str:
                 select(ArticleSummary).where(ArticleSummary.article_id == ta.article_id)
             ).first()
 
-            title = (article.title or "").strip() or article.url
             flags: list[str] = []
             if article.is_paywalled:
                 flags.append("[paywalled]")
@@ -110,9 +165,11 @@ def write_digest(session: Session, digest: Digest) -> str:
             flag_str = (" " + " ".join(flags)) if flags else ""
             summary_text = (article_summary.summary_text or "") if article_summary else ""
 
-            lines.append(f"- [{title}]({article.url}){flag_str}")
             if summary_text:
-                lines.append(f"  {summary_text}")
+                lines.append(f"- {summary_text}")
+                lines.append(f"  [Source]({article.url}){flag_str}")
+            else:
+                lines.append(f"- [Source]({article.url}){flag_str}")
 
         lines.append("")
 
