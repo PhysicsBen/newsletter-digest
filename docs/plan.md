@@ -240,3 +240,73 @@ Best-effort: extract whatever is publicly visible, mark `is_paywalled=True`, inc
 - **Topics:** Auto-discovered by LLM. Lifecycle management (merge/resolve) is backlog; schema is ready
 - **Trigger:** Manual CLI for now (`python -m src.pipeline`); ready for cron/Railway cron later
 - **New newsletters:** Add a row to `newsletter_sources`; no code changes required
+
+---
+
+## Railway Migration Plan
+
+**Target:** Run the pipeline as a scheduled Railway Cron Service against Railway Postgres.
+
+**Model note:** Migrated default from `gemini/gemini-3-flash-preview` (discontinued May 25 2026) to `gemini/gemini-3.1-flash-lite` (GA). Already updated in `src/config.py`.
+
+### Phase 1 — Database: SQLite → Railway Postgres
+- Provision Railway Postgres plugin; Railway auto-injects `DATABASE_URL`
+- Run `alembic upgrade head` against Postgres; validate schema (watch for JSON column and enum dialect differences)
+- Smoke-test pipeline end-to-end against Postgres before proceeding
+
+### Phase 2 — Gmail OAuth2 Credentials (highest risk)
+The current flow assumes a local filesystem and browser for the initial OAuth dance.
+
+**credentials.json** (Google OAuth client config):
+- Store JSON contents as Railway secret env var `GMAIL_CREDENTIALS_JSON`
+- Modify `_get_credentials()` in `gmail_client.py` to write a temp file from this env var if the credentials path doesn't exist on disk
+
+**token.json** (user OAuth token):
+- Perform one-time browser OAuth flow locally to generate a valid `token.json`
+- Serialize contents to Railway secret env var `GMAIL_TOKEN_JSON`
+- Modify `_get_credentials()` to bootstrap `token.json` from this env var on cold start
+- Handle token refresh write-back: intercept the refresh callback and update a Railway Volume file (or re-persist to the env var via Railway API) — without this, the token will go stale after container restarts
+
+Risk: the initial OAuth flow requires a browser (can't run on Railway). Must be done locally. Token refresh persistence requires custom plumbing.
+
+### Phase 3 — Docker Image
+Use a Dockerfile (not Nixpacks) to:
+1. Install Python dependencies
+2. Pre-download and cache the `BAAI/bge-small-en-v1.5` embedding model (~130MB) at **build time**:
+   ```
+   RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5')"
+   ```
+   This avoids a ~130MB HuggingFace download on every cold start (Railway containers have ephemeral filesystems)
+3. Copy source code; set entrypoint to `python -m src.pipeline`
+
+### Phase 4 — Scheduled Execution
+- Deploy as a **Railway Cron Service** (not a web service)
+- Add `railway.json` with cron schedule (weekly) and the pipeline command
+- Railway Cron runs the container on schedule, exits cleanly — maps naturally to the existing one-shot CLI
+
+### Phase 5 — Output Files
+The `output/` directory is ephemeral in Railway containers. Since digests are already emailed, the simplest path is to accept this. Options:
+1. **Accept ephemeral** — digests delivered by email, file archive not needed *(recommended)*
+2. **Railway Volume** — mount persistent volume at `output/` if file archive is wanted
+3. **Store in DB** — add `body_markdown` column to `digests` table (future enhancement)
+
+### Phase 6 — Environment Variables
+| Variable | Notes |
+|---|---|
+| `DATABASE_URL` | Auto-injected by Railway Postgres plugin |
+| `GEMINI_API_KEY` | Secret |
+| `GMAIL_CREDENTIALS_JSON` | Secret — full JSON string from `credentials.json` |
+| `GMAIL_TOKEN_JSON` | Secret — full JSON string from `token.json` (post-initial auth) |
+| `DIGEST_RECIPIENT_EMAIL` | Delivery address |
+| `LLM_MODEL` | `gemini/gemini-3.1-flash-lite` |
+| `LLM_THINKING_LEVEL`, `LLM_CONCURRENCY`, etc. | Non-sensitive config |
+
+### Migration Sequence
+1. Stand up Railway Postgres; run `alembic upgrade head`; validate schema
+2. Perform one-time local OAuth flow; capture fresh `token.json`
+3. Load all secrets and config into Railway environment variables
+4. Write and test Dockerfile locally (verify embedding model bakes in cleanly)
+5. Modify `_get_credentials()` to bootstrap credentials and token from env vars; handle refresh write-back
+6. Harden `config.py`: remove SQLite fallback default, require `DATABASE_URL` to be set explicitly
+7. Deploy as Railway Cron service; trigger manually to validate end-to-end
+8. Decide on output file persistence (ephemeral vs. volume)
