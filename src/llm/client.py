@@ -32,9 +32,9 @@ def call_llm(messages: list[dict], thinking: bool = False, **kwargs) -> str:
     extra: dict = {}
 
     if _is_gemini():
-        if settings.llm_thinking_level:
+        if thinking and settings.llm_thinking_level:
             extra["thinking"] = {
-                "type": "enabled" if thinking else "disabled",
+                "type": "enabled",
                 "thinking_level": settings.llm_thinking_level,
             }
         # Gemini 3 requires temperature=1.0 (default); never set it.

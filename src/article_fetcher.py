@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
 import trafilatura
@@ -35,11 +35,28 @@ _SOFT_PAYWALL_SIGNALS = [
 FETCH_TIMEOUT = 20.0  # seconds
 
 
+# Query parameters that are purely for tracking and carry no content identity.
+_TRACKING_PARAMS = frozenset({
+    # UTM
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id",
+    # Ad-click IDs
+    "fbclid", "gclid", "dclid", "gbraid", "wbraid",
+    # Substack email personalisation
+    "token", "r",
+    # Mailchimp
+    "mc_cid", "mc_eid",
+    # Dub.co short-link tracking
+    "dub_id",
+})
+
+
 def canonicalize_url(url: str) -> str:
     """Strip tracking parameters and normalize the URL."""
     parsed = urlparse(url)
-    # Drop fragment; keep scheme/netloc/path/params/query as-is for now
-    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, parsed.query, ""))
+    clean_qs = urlencode(
+        [(k, v) for k, v in parse_qsl(parsed.query) if k not in _TRACKING_PARAMS]
+    )
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, clean_qs, ""))
 
 
 def _is_soft_paywalled(text: str) -> bool:
@@ -160,6 +177,11 @@ def _fetch_one(session: Session, client: httpx.Client, article: Article, canonic
 
     article.body_text = body
     article.title = (data.get("title") or "").strip() or None
+
+    # Prefer the publisher's own canonical URL extracted from <link rel="canonical">
+    trafilatura_url = (data.get("url") or "").strip()
+    if trafilatura_url:
+        article.canonical_url = canonicalize_url(trafilatura_url)
 
     pub_date = data.get("date")
     if pub_date:

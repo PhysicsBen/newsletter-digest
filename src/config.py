@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     topic_similarity_threshold: float = 0.82
     digest_significance_min_score: float = 5.0  # topics below this are excluded from the digest
     token_budget: int = 6000
-    llm_concurrency: int = 10  # parallel LLM workers (Gemini); use 1 for Ollama
+    llm_concurrency: int = 3  # parallel LLM workers; keep low to avoid Gemini rate limits
     llm_retries: int = 5  # retries on transient errors (503, 429) with exponential backoff
 
 
