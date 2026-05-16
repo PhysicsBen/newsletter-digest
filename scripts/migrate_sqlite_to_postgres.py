@@ -56,13 +56,33 @@ ORDERED_TABLES = [
 
 BATCH_SIZE = 500
 
+# SQLite stores booleans as 0/1 integers; Postgres needs real booleans.
+# Map: table -> set of column names that must be cast to bool.
+BOOL_COLUMNS: dict[str, set[str]] = {
+    "articles": {"is_paywalled"},
+}
+
+
+def _coerce_row(row: dict, table: str) -> dict:
+    bools = BOOL_COLUMNS.get(table, set())
+    if not bools:
+        return row
+    return {k: bool(v) if k in bools and v is not None else v for k, v in row.items()}
+
 
 def copy_table(src_conn, dst_conn, table: str) -> int:
     """Copy all rows from src to dst for one table. Returns rows inserted."""
-    rows = src_conn.execute(text(f"SELECT * FROM {table}")).mappings().all()
-    if not rows:
+    src_count = src_conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()
+    if not src_count:
         log.info("  %s — empty, skipping", table)
         return 0
+
+    dst_count = dst_conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()
+    if dst_count >= src_count:
+        log.info("  %s — already migrated (%d rows), skipping", table, dst_count)
+        return 0
+
+    rows = src_conn.execute(text(f"SELECT * FROM {table}")).mappings().all()
 
     cols = list(rows[0].keys())
     placeholders = ", ".join(f":{c}" for c in cols)
@@ -74,7 +94,7 @@ def copy_table(src_conn, dst_conn, table: str) -> int:
     )
     inserted = 0
     for i in range(0, len(rows), BATCH_SIZE):
-        batch = [dict(r) for r in rows[i : i + BATCH_SIZE]]
+        batch = [_coerce_row(dict(r), table) for r in rows[i : i + BATCH_SIZE]]
         result = dst_conn.execute(stmt, batch)
         inserted += result.rowcount
         if len(rows) > BATCH_SIZE:
