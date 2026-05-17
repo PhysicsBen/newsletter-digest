@@ -95,6 +95,9 @@ def _summarize_text(text: str, trust_weight: float) -> tuple[str, float]:
     Summarize a single text. Chunks if it exceeds token_budget, then combines
     chunk summaries into a final summary via a second LLM call.
     """
+    if not text or not text.strip():
+        raise ValueError("Cannot summarize empty body_text")
+
     budget = settings.token_budget
 
     if len(text) <= budget * _CHARS_PER_TOKEN:
@@ -165,8 +168,12 @@ def summarize_canonical_stories(session: Session) -> int:
     pending: list[tuple[int, int, str, float]] = []  # (story_id, article_id, body_text, trust_weight)
     for story in stories:
         rep_article = session.get(Article, story.representative_article_id)
-        if rep_article is None or not rep_article.body_text:
-            log.warning("Skipping canonical_story %d — no body_text on representative article", story.id)
+        body_text = (rep_article.body_text or "").strip() if rep_article else ""
+        if not body_text or len(body_text) < 50:
+            log.warning(
+                "Skipping canonical_story %d — body_text missing or too short (%d chars)",
+                story.id, len(body_text),
+            )
             continue
 
         trust_weight = 1.0
@@ -176,7 +183,7 @@ def summarize_canonical_stories(session: Session) -> int:
         if na and na.newsletter and na.newsletter.source:
             trust_weight = na.newsletter.source.trust_weight
 
-        pending.append((story.id, rep_article.id, rep_article.body_text, trust_weight))
+        pending.append((story.id, rep_article.id, body_text, trust_weight))
 
     def _worker(args: tuple[int, int, str, float]) -> tuple[int, int, str, float]:
         """Called in a thread — no DB access. Returns (story_id, article_id, summary, score)."""

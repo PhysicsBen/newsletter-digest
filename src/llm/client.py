@@ -1,8 +1,15 @@
+import logging
 import os
 
 import litellm
 
 from src.config import settings
+
+# Suppress LiteLLM's verbose INFO/DEBUG output — it writes to stderr which
+# Railway (and most log aggregators) classify as error-level.
+os.environ.setdefault("LITELLM_LOG", "ERROR")
+logging.getLogger("LiteLLM").setLevel(logging.ERROR)
+logging.getLogger("litellm").setLevel(logging.ERROR)
 
 # Provide the API key to LiteLLM via environment variable
 if settings.gemini_api_key:
