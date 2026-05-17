@@ -27,4 +27,4 @@ RUN useradd --no-create-home --shell /bin/false appuser \
 USER appuser
 
 # Run migrations then the pipeline. alembic upgrade head is idempotent.
-CMD ["sh", "-c", "alembic upgrade head && python -c 'print(\"Python OK\")' && python -m src.pipeline 2>&1"]
+CMD ["sh", "-c", "alembic upgrade head; echo \"alembic exit: $?\"; python -c 'print(\"Python OK\")'; python -m src.pipeline 2>&1"]

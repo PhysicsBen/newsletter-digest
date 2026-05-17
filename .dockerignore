@@ -1,0 +1,10 @@
+.venv/
+.git/
+data/
+output/
+__pycache__/
+*.pyc
+*.pyo
+.env
+token.json
+credentials.json
