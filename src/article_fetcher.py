@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -21,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.db.models import Article, ProcessingStatus
+from src.db.session import get_session
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +35,7 @@ _SOFT_PAYWALL_SIGNALS = [
 ]
 
 FETCH_TIMEOUT = 20.0  # seconds
+FETCH_WORKERS = 20    # concurrent HTTP workers
 
 
 # Query parameters that are purely for tracking and carry no content identity.
@@ -77,43 +80,72 @@ _HEADERS = {
 def fetch_pending_articles(session: Session) -> tuple[int, int]:
     """
     Fetch and extract content for all articles with processing_status=pending.
-    Skips articles already at done/failed.
+    Uses a thread pool so multiple HTTP requests run concurrently.
+    Each worker runs with its own DB session (SQLAlchemy sessions are not thread-safe).
 
     Returns (done_count, failed_count).
     """
-    pending = (
+    pending_ids: list[int] = (
         session.execute(
-            select(Article).where(Article.processing_status == ProcessingStatus.pending)
+            select(Article.id).where(Article.processing_status == ProcessingStatus.pending)
         )
         .scalars()
         .all()
     )
 
-    log.info("Found %d pending articles to fetch", len(pending))
+    log.info("Found %d pending articles to fetch", len(pending_ids))
+    if not pending_ids:
+        return 0, 0
+
     done_count = 0
     failed_count = 0
 
+    # httpx.Client is thread-safe; share one instance across all workers.
     with httpx.Client(timeout=FETCH_TIMEOUT, follow_redirects=True, headers=_HEADERS) as client:
-        for article in pending:
-            article.processing_status = ProcessingStatus.in_progress
-            session.flush()
-
-            canonical = canonicalize_url(article.url)
-
-            try:
-                _fetch_one(session, client, article, canonical)
-                if article.processing_status == ProcessingStatus.done:
-                    done_count += 1
-                # else: rate-limited (pending) — not counted as done or failed
-            except Exception as exc:
-                log.warning("Failed to fetch %s: %s", article.url, exc)
-                article.processing_status = ProcessingStatus.failed
-                failed_count += 1
-
-            session.commit()
+        with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as executor:
+            futures = {
+                executor.submit(_fetch_one_threaded, article_id, client): article_id
+                for article_id in pending_ids
+            }
+            for future in as_completed(futures):
+                article_id = futures[future]
+                try:
+                    status = future.result()
+                    if status == "done":
+                        done_count += 1
+                    elif status == "failed":
+                        failed_count += 1
+                    # "pending" (rate-limited) counts as neither
+                except Exception as exc:
+                    log.warning("Unexpected error processing article %d: %s", article_id, exc)
+                    failed_count += 1
 
     log.info("Article fetch complete: %d done, %d failed", done_count, failed_count)
     return done_count, failed_count
+
+
+def _fetch_one_threaded(article_id: int, client: httpx.Client) -> str:
+    """Fetch a single article using a thread-local DB session. Returns 'done', 'failed', or 'pending'."""
+    with get_session() as thread_session:
+        article = thread_session.execute(
+            select(Article).where(Article.id == article_id)
+        ).scalar_one_or_none()
+        if article is None:
+            return "failed"
+
+        article.processing_status = ProcessingStatus.in_progress
+        thread_session.flush()
+
+        canonical = canonicalize_url(article.url)
+        try:
+            _fetch_one(thread_session, client, article, canonical)
+            thread_session.commit()
+            return "done" if article.processing_status == ProcessingStatus.done else "pending"
+        except Exception as exc:
+            log.warning("Failed to fetch %s: %s", article.url, exc)
+            article.processing_status = ProcessingStatus.failed
+            thread_session.commit()
+            return "failed"
 
 
 def _fetch_one(session: Session, client: httpx.Client, article: Article, canonical_url: str) -> None:

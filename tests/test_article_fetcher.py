@@ -1,9 +1,11 @@
 """Tests for article_fetcher utility functions."""
 import json
 import pytest
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from src.article_fetcher import canonicalize_url, _is_soft_paywalled, fetch_pending_articles
 from src.db.models import Article, Base, ProcessingStatus
@@ -41,12 +43,35 @@ def test_no_soft_paywall(text="This is a normal article with full content availa
 
 @pytest.fixture
 def session():
-    """Fresh in-memory SQLite session per test."""
-    engine = create_engine("sqlite:///:memory:", echo=False)
+    """Fresh in-memory SQLite session per test.
+
+    Uses StaticPool so all connections (including worker threads) share one
+    underlying SQLite connection and see each other's committed data.
+    get_session is patched so _fetch_one_threaded uses this engine too.
+    """
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        echo=False,
+    )
     Base.metadata.create_all(engine)
-    factory = sessionmaker(bind=engine, expire_on_commit=False)
-    s = factory()
-    yield s
+    SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+    s = SessionLocal()
+
+    @contextmanager
+    def _mock_get_session():
+        ts = SessionLocal()
+        try:
+            yield ts
+        except Exception:
+            ts.rollback()
+            raise
+        finally:
+            ts.close()
+
+    with patch("src.article_fetcher.get_session", _mock_get_session):
+        yield s
     s.close()
     Base.metadata.drop_all(engine)
 
@@ -82,6 +107,7 @@ def test_fetch_marks_done(mock_extract, mock_client_cls, session):
 
     assert done == 1
     assert failed == 0
+    session.expire_all()
     a = session.query(Article).filter_by(url="https://example.com/story-1").one()
     assert a.processing_status == ProcessingStatus.done
     assert a.body_text == "Full article text."
@@ -103,6 +129,7 @@ def test_fetch_403_marks_paywalled(mock_extract, mock_client_cls, session):
     done, failed = fetch_pending_articles(session)
 
     assert done == 1
+    session.expire_all()
     a = session.query(Article).filter_by(url="https://example.com/story-1").one()
     assert a.is_paywalled is True
     assert a.processing_status == ProcessingStatus.done
@@ -124,6 +151,7 @@ def test_fetch_soft_paywall_detected(mock_extract, mock_client_cls, session):
 
     fetch_pending_articles(session)
 
+    session.expire_all()
     a = session.query(Article).filter_by(url="https://example.com/story-1").one()
     assert a.is_paywalled is True
 
@@ -143,6 +171,7 @@ def test_fetch_network_error_marks_failed(mock_client_cls, session):
     done, failed = fetch_pending_articles(session)
 
     assert failed == 1
+    session.expire_all()
     a = session.query(Article).filter_by(url="https://example.com/story-1").one()
     assert a.processing_status == ProcessingStatus.failed
 

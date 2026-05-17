@@ -94,6 +94,17 @@ def run(since: datetime | None = None) -> None:
     init_db()
 
     with get_session() as session:
+        # Reset any articles stuck in in_progress from a previous interrupted run.
+        from sqlalchemy import update
+        reset_count = session.execute(
+            update(Article)
+            .where(Article.processing_status == ProcessingStatus.in_progress)
+            .values(processing_status=ProcessingStatus.pending)
+        ).rowcount
+        if reset_count:
+            log.info("Reset %d interrupted (in_progress) articles back to pending", reset_count)
+        session.commit()
+
         log.info("Phase 1 — Gmail ingestion")
         email_count = fetch_new_emails(session, since=since)
         log.info("Fetched %d new emails", email_count)
