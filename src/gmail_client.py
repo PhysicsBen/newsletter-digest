@@ -35,6 +35,7 @@ log = logging.getLogger(__name__)
 WATERMARK_KEY = "gmail_last_fetch"
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
 ]
 
 # Only follow http/https links; skip mailto, cid, tracking pixels, etc.
