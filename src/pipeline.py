@@ -14,6 +14,8 @@ Phases:
     6. Digest assembly
 """
 from __future__ import annotations
+import sys
+print("[pipeline] Python interpreter started, loading imports...", flush=True)
 
 import argparse
 import logging

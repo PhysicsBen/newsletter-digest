@@ -2,8 +2,7 @@
 builder = "DOCKERFILE"
 
 [deploy]
-startCommand = "alembic upgrade head && python -m src.pipeline"
+startCommand = "echo '[railway] container started' && alembic upgrade head 2>&1 && echo '[railway] alembic done, starting python' && python -u -m src.pipeline 2>&1; CODE=$?; echo \"[railway] python exited with code $CODE\"; exit $CODE"
 # ON_FAILURE: restart only on non-zero exit; clean pipeline exits (0) stop the container.
-# This prevents the infinite restart loop that swallows logs.
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
