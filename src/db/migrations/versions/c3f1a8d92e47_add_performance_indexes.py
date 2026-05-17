@@ -19,15 +19,15 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Phase 2: fetch pending articles
-    op.create_index("ix_articles_processing_status", "articles", ["processing_status"])
+    op.create_index("ix_articles_processing_status", "articles", ["processing_status"], postgresql_concurrently=False, if_not_exists=True)
     # Phase 3: find articles without a canonical story yet
-    op.create_index("ix_articles_canonical_story_id", "articles", ["canonical_story_id"])
+    op.create_index("ix_articles_canonical_story_id", "articles", ["canonical_story_id"], if_not_exists=True)
     # digest_writer: per-article summary lookups
-    op.create_index("ix_article_summaries_article_id", "article_summaries", ["article_id"])
+    op.create_index("ix_article_summaries_article_id", "article_summaries", ["article_id"], if_not_exists=True)
     # digest_writer: topic article lookups by digest
-    op.create_index("ix_topic_articles_digest_id", "topic_articles", ["digest_id"])
+    op.create_index("ix_topic_articles_digest_id", "topic_articles", ["digest_id"], if_not_exists=True)
     # summarizer: trust_weight lookups via newsletter_articles
-    op.create_index("ix_newsletter_articles_article_id", "newsletter_articles", ["article_id"])
+    op.create_index("ix_newsletter_articles_article_id", "newsletter_articles", ["article_id"], if_not_exists=True)
 
 
 def downgrade() -> None:
