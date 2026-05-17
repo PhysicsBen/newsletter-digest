@@ -26,7 +26,6 @@ RUN useradd --no-create-home --shell /bin/false appuser \
     && chown -R appuser /app
 USER appuser
 
-# Run migrations then the pipeline. alembic upgrade head is idempotent.
-# Merge stderr into stdout (2>&1) so Railway's log viewer captures everything in one stream.
-# Echo the exit code explicitly so crashes are visible even if Python swallows the traceback.
-CMD ["sh", "-c", "alembic upgrade head 2>&1 && echo '[startup] alembic done, launching pipeline' && python -u -m src.pipeline 2>&1; EXIT=$?; echo \"[startup] pipeline exited with code $EXIT\"; exit $EXIT"]
+# startCommand in railway.toml takes precedence over CMD in Railway deploys.
+# This CMD is kept as a fallback for local docker run.
+CMD ["python", "-u", "-m", "src.pipeline"]

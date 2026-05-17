@@ -14,6 +14,7 @@ Phases:
     6. Digest assembly
 """
 from __future__ import annotations
+import subprocess
 import sys
 print("[pipeline] Python interpreter started, loading imports...", flush=True)
 
@@ -136,7 +137,21 @@ def run(since: datetime | None = None) -> None:
             raise
 
 
+def _run_migrations() -> None:
+    """Run alembic upgrade head via subprocess so output appears in the Python log stream."""
+    print("[pipeline] Running database migrations...", flush=True)
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        capture_output=False,  # inherit stdout/stderr so Railway captures them
+    )
+    if result.returncode != 0:
+        print(f"[pipeline] alembic exited with code {result.returncode} — aborting", flush=True)
+        sys.exit(result.returncode)
+    print("[pipeline] Migrations complete.", flush=True)
+
+
 def main() -> None:
+    _run_migrations()
     parser = argparse.ArgumentParser(description="Newsletter digest pipeline")
     parser.add_argument(
         "--since",
