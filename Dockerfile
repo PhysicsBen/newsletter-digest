@@ -3,6 +3,10 @@ FROM python:3.13-slim
 WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1
+# Point HuggingFace / sentence-transformers cache to a path inside /app
+# (appuser has no home dir, so ~/.cache would fail)
+ENV HF_HOME=/app/.cache
+ENV SENTENCE_TRANSFORMERS_HOME=/app/.cache/sentence-transformers
 
 # System deps for lxml / trafilatura
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -18,8 +22,9 @@ COPY . .
 
 # Run as a non-root user
 RUN useradd --no-create-home --shell /bin/false appuser \
+    && mkdir -p /app/.cache \
     && chown -R appuser /app
 USER appuser
 
 # Run migrations then the pipeline. alembic upgrade head is idempotent.
-CMD ["sh", "-c", "alembic upgrade head && python -m src.pipeline"]
+CMD ["sh", "-c", "alembic upgrade head && python -m src.pipeline 2>&1"]
