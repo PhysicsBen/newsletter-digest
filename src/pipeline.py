@@ -126,8 +126,12 @@ def run(since: datetime | None = None) -> None:
 
     if settings.digest_recipient_email and output_path:
         from pathlib import Path
-        send_digest_file(Path(output_path), settings.digest_recipient_email)
-        log.info("Digest emailed to %s", settings.digest_recipient_email)
+        try:
+            send_digest_file(Path(output_path), settings.digest_recipient_email)
+            log.info("Digest emailed to %s", settings.digest_recipient_email)
+        except Exception:
+            log.exception("Failed to send digest email")
+            raise
 
 
 def main() -> None:
@@ -185,4 +189,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    import traceback
+    try:
+        main()
+    except Exception:
+        # Force traceback to stdout so Railway's log viewer captures it even if stderr is split.
+        print("[FATAL] Pipeline crashed with unhandled exception:", flush=True)
+        traceback.print_exc(file=sys.stdout)
+        sys.stdout.flush()
+        sys.exit(1)
