@@ -2,6 +2,8 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
+ENV PYTHONUNBUFFERED=1
+
 # System deps for lxml / trafilatura
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2 libxslt1.1 \
