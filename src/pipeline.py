@@ -124,6 +124,11 @@ def run(since: datetime | None = None) -> None:
 
         session.commit()
 
+    if settings.digest_recipient_email and output_path:
+        from pathlib import Path
+        send_digest_file(Path(output_path), settings.digest_recipient_email)
+        log.info("Digest emailed to %s", settings.digest_recipient_email)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Newsletter digest pipeline")
